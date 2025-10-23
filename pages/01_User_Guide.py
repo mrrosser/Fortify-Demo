@@ -9,7 +9,7 @@ st.markdown(
 ## 1. Getting Started
 - **Access** - Enter the demo password (default `demo`) if prompted.
 - **Data selection** - Upload your own CSV or keep the bundled sample dataset checked to explore synthetic Greater New Orleans roofs.
-- **Training** - Click **Train / Re-train Models** after changing data or enrichment settings to refresh predictions and metrics.
+- **Training** - Models retrain automatically whenever you change data, enrichment, or scenario sliders.
 - **Scenario sliders** - Adjust storm wind/rainfall and fortified status to see how risk responds in real time.
 
 ## 2. Understanding the Dashboard

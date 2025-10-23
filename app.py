@@ -139,7 +139,7 @@ with st.sidebar:
     counterfactual_toggle = st.selectbox("Counterfactual fortified status", ["none", "force_fortified", "force_unfortified"], index=0)
 
     st.header("Training")
-    train_button = st.button("Train / Re-train Models")
+    st.caption("Models retrain automatically whenever inputs or data change.")
     export_models = st.checkbox("Enable model artifact download", value=True)
 
     st.header("Map settings")
@@ -192,7 +192,9 @@ if enrich_toggle:
 signature_columns = NUM_FEATURES + CAT_FEATURES + [CLASS_TARGET, REG_TARGET]
 signature_source = train_df[signature_columns].to_csv(index=False, float_format="%.6f")
 train_signature = hashlib.sha1(signature_source.encode("utf-8")).hexdigest()
-auto_retrain = st.session_state.get("train_signature") != train_signature
+prev_signature = st.session_state.get("train_signature")
+first_run = prev_signature is None
+auto_retrain = (prev_signature is not None) and (prev_signature != train_signature)
 
 if issues:
     with st.expander("Data validation notes", expanded=False):
@@ -203,7 +205,7 @@ if issues:
 needs_training = (
     "clf" not in st.session_state
     or "reg" not in st.session_state
-    or train_button
+    or first_run
     or auto_retrain
 )
 if needs_training:
@@ -252,10 +254,10 @@ if needs_training:
     st.session_state["clf_importances_error"] = importance_error
     st.session_state["train_signature"] = train_signature
 
-    if auto_retrain and not train_button:
-        st.info("Scenario change detected; models retrained automatically.")
-    else:
-        st.success("Models (re)trained.")
+    if first_run:
+        st.success("Models initialized.")
+    elif auto_retrain:
+        st.info("Inputs changed; models retrained automatically.")
 
 clf = st.session_state.get("clf", None)
 reg = st.session_state.get("reg", None)
