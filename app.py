@@ -9,7 +9,17 @@ import datetime as dt
 import altair as alt
 import plotly.graph_objects as go
 
-from fortifyy.config import DISPLAY_NAME, CLASS_TARGET, REG_TARGET, NUM_FEATURES, CAT_FEATURES, MAP_DEFAULTS
+from fortifyy.config import (
+    DISPLAY_NAME,
+    CLASS_TARGET,
+    REG_TARGET,
+    NUM_FEATURES,
+    CAT_FEATURES,
+    MAP_DEFAULTS,
+    BASE_NUM_FEATURES,
+    PROPRIETARY_FEATURES,
+    PUBLIC_NUM_FEATURES,
+)
 from fortifyy.data import load_sample_data, validate_and_prepare
 from fortifyy.model import (
     build_classification_pipeline,
@@ -155,26 +165,32 @@ if enrich_toggle:
         df = enrich_with_public_data(df, start_date=str(ed1), end_date=str(ed2), bbox=bbox, fema_feature_url=fema_feature_url)
     st.success('Enriched with public data.')
     status_rows = describe_enrichment_status(df)
-    if status_rows:
-        badge_colors = {"success": "#28a745", "warning": "#ffb703", "error": "#e63946"}
-        badge_icons = {"success": "✅", "warning": "⚠️", "error": "❌"}
-        parts = []
-        for label, detail, level in status_rows:
-            color = badge_colors.get(level, "#6c757d")
-            icon = badge_icons.get(level, "ℹ️")
-            parts.append(
-                f"""
-                <div style="border-left:4px solid {color};padding:8px 12px;margin-bottom:6px;background-color:rgba(0,0,0,0.03);border-radius:4px;">
-                    <strong style="color:{color};">{icon} {label}:</strong>
-                    <span style="margin-left:6px;color:#333;">{detail}</span>
-                </div>
-                """
-            )
-        st.markdown("".join(parts), unsafe_allow_html=True)
-    if any(c for c in df.columns if c.startswith("_enrich_warn_")):
-        with st.expander("Enrichment warnings", expanded=False):
-            warns = [f"{c}: {df[c].iloc[0]}" for c in df.columns if c.startswith("_enrich_warn_")]
-            for wmsg in warns: st.warning(wmsg)
+    warn_messages = []
+    for col in (c for c in df.columns if c.startswith("_enrich_warn_")):
+        val = df[col].iloc[0]
+        if pd.notna(val):
+            text = str(val).strip()
+            if text:
+                warn_messages.append(f"{col}: {text}")
+    if status_rows or warn_messages:
+        with st.expander("Enrichment status & warnings", expanded=False):
+            if status_rows:
+                badge_colors = {"success": "#28a745", "warning": "#ffb703", "error": "#e63946"}
+                badge_icons = {"success": "✅", "warning": "⚠️", "error": "❌"}
+                for label, detail, level in status_rows:
+                    color = badge_colors.get(level, "#6c757d")
+                    icon = badge_icons.get(level, "ℹ️")
+                    st.markdown(
+                        f"""
+                        <div style="border-left:4px solid {color};padding:8px 12px;margin-bottom:6px;background-color:rgba(0,0,0,0.03);border-radius:4px;">
+                            <strong style="color:{color};">{icon} {label}:</strong>
+                            <span style="margin-left:6px;color:#333;">{detail}</span>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+            for msg in warn_messages:
+                st.warning(msg)
 
 if issues:
     with st.expander("Data validation notes", expanded=False):
@@ -259,21 +275,53 @@ with st.expander("Model metrics & explainability", expanded=True):
         display_df = display_df.fillna(0)
         display_df["importance"] = display_df["importance"].round(4)
         display_df["importance_pct"] = display_df["importance_pct"].round(1)
-        chart_data = display_df.sort_values("importance", ascending=True)
-        chart = (
-            alt.Chart(chart_data)
-            .mark_bar(color="#4e79a7")
-            .encode(
-                x=alt.X("importance:Q", title="Permutation importance"),
-                y=alt.Y("feature:N", sort=alt.Sort(field="importance", order="ascending")),
-                tooltip=[alt.Tooltip("feature:N", title="Feature"),
-                         alt.Tooltip("importance:Q", title="Importance", format=".4f"),
-                         alt.Tooltip("importance_pct:Q", title="Share (%)", format=".1f")]
-            )
+        group_options = {
+            "All features": None,
+            "Structural inputs": set(BASE_NUM_FEATURES),
+            "Proprietary signals": set(PROPRIETARY_FEATURES),
+            "Public data inputs": set(PUBLIC_NUM_FEATURES),
+            "Categorical inputs": set(CAT_FEATURES),
+        }
+        selected_group = st.selectbox(
+            "Feature group",
+            list(group_options.keys()),
+            index=0,
+            key="importance_group_filter",
         )
-        st.altair_chart(chart, use_container_width=True)
-        pretty_df = display_df.rename(columns={"feature": "Feature", "importance": "Importance", "importance_pct": "Share (%)"})
-        st.dataframe(pretty_df)
+        filtered_df = display_df.copy()
+        group_set = group_options[selected_group]
+        if group_set:
+            filtered_df = filtered_df[filtered_df["feature"].isin(group_set)]
+        if filtered_df.empty:
+            st.info("No features available for the selected group. Try choosing a different filter.")
+        else:
+            top_max = len(filtered_df)
+            top_default = min(8, top_max)
+            top_n = st.slider(
+                "Top features to display",
+                min_value=1,
+                max_value=top_max,
+                value=top_default,
+                key="importance_top_n",
+            )
+            top_df = filtered_df.sort_values("importance", ascending=False).head(top_n)
+            chart_data = top_df.sort_values("importance", ascending=True)
+            chart = (
+                alt.Chart(chart_data)
+                .mark_bar(color="#4e79a7")
+                .encode(
+                    x=alt.X("importance:Q", title="Permutation importance"),
+                    y=alt.Y("feature:N", sort=alt.Sort(field="importance", order="ascending")),
+                    tooltip=[
+                        alt.Tooltip("feature:N", title="Feature"),
+                        alt.Tooltip("importance:Q", title="Importance", format=".4f"),
+                        alt.Tooltip("importance_pct:Q", title="Share (%)", format=".1f"),
+                    ],
+                )
+            )
+            st.altair_chart(chart, use_container_width=True)
+            pretty_df = top_df.rename(columns={"feature": "Feature", "importance": "Importance", "importance_pct": "Share (%)"})
+            st.dataframe(pretty_df)
     elif importance_error:
         st.caption(f"Importance calc skipped: {importance_error}")
     else:
