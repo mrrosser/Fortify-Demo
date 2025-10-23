@@ -32,11 +32,6 @@ FEMA_DA_FEATURE_URL      # default FeatureServer endpoint
 FORTIFYY_DEMO_PASSWORD   # protects the app UI
 ```
 
-## 4. Exporting & Next Steps
-- **Download buttons** provide a CSV of parcel predictions and (optionally) Joblib model artifacts.
-- **Shareable deployment** – Push to GitHub and host on Streamlit Community Cloud; populate secrets with the API key/password.
-- **Production readiness** – Replace the synthetic dataset with real inventory, keep curated mirrors up to date, and retune models before any production rollout.
-
 Need more detail? The project README in the repository covers installation commands and advanced configuration tips.
 """
 )
