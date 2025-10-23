@@ -8,6 +8,7 @@ import pydeck as pdk
 import datetime as dt
 import altair as alt
 import plotly.graph_objects as go
+import hashlib
 
 from fortifyy.config import (
     DISPLAY_NAME,
@@ -164,10 +165,16 @@ if enrich_toggle:
     with st.spinner('Fetching NOAA/USGS/FEMA features...'):
         df = enrich_with_public_data(df, start_date=str(ed1), end_date=str(ed2), bbox=bbox, fema_feature_url=fema_feature_url)
     st.success('Enriched with public data.')
-    status_rows = describe_enrichment_status(df)
-    warn_messages = []
-    for col in (c for c in df.columns if c.startswith("_enrich_warn_")):
-        val = df[col].iloc[0]
+
+train_df = apply_scenario_adjustments(df.copy(), wind_mph=scenario_wind, rain_in=scenario_rain)
+train_df = enrich_proprietary(train_df)
+
+status_rows = []
+warn_messages = []
+if enrich_toggle:
+    status_rows = describe_enrichment_status(train_df)
+    for col in (c for c in train_df.columns if c.startswith("_enrich_warn_")):
+        val = train_df[col].iloc[0]
         if pd.notna(val):
             text = str(val).strip()
             if text:
@@ -175,22 +182,17 @@ if enrich_toggle:
     if status_rows or warn_messages:
         with st.expander("Enrichment status & warnings", expanded=False):
             if status_rows:
-                badge_colors = {"success": "#28a745", "warning": "#ffb703", "error": "#e63946"}
-                badge_icons = {"success": "✅", "warning": "⚠️", "error": "❌"}
+                level_labels = {"success": "OK", "warning": "WARN", "error": "ERROR"}
                 for label, detail, level in status_rows:
-                    color = badge_colors.get(level, "#6c757d")
-                    icon = badge_icons.get(level, "ℹ️")
-                    st.markdown(
-                        f"""
-                        <div style="border-left:4px solid {color};padding:8px 12px;margin-bottom:6px;background-color:rgba(0,0,0,0.03);border-radius:4px;">
-                            <strong style="color:{color};">{icon} {label}:</strong>
-                            <span style="margin-left:6px;color:#333;">{detail}</span>
-                        </div>
-                        """,
-                        unsafe_allow_html=True,
-                    )
+                    tag = level_labels.get(level, level.upper())
+                    st.markdown(f"- **{label}** [{tag}]: {detail}")
             for msg in warn_messages:
                 st.warning(msg)
+
+signature_columns = NUM_FEATURES + CAT_FEATURES + [CLASS_TARGET, REG_TARGET]
+signature_source = train_df[signature_columns].to_csv(index=False, float_format="%.6f")
+train_signature = hashlib.sha1(signature_source.encode("utf-8")).hexdigest()
+auto_retrain = st.session_state.get("train_signature") != train_signature
 
 if issues:
     with st.expander("Data validation notes", expanded=False):
@@ -198,14 +200,20 @@ if issues:
             st.warning(msg)
 
 # Train or reuse
-if "clf" not in st.session_state or "reg" not in st.session_state or train_button:
+needs_training = (
+    "clf" not in st.session_state
+    or "reg" not in st.session_state
+    or train_button
+    or auto_retrain
+)
+if needs_training:
     clf = build_calibrated_classifier(NUM_FEATURES, CAT_FEATURES)
     reg = build_regression_pipeline(NUM_FEATURES, CAT_FEATURES)
     clf_for_importance = build_classification_pipeline(NUM_FEATURES, CAT_FEATURES)
 
-    X = df[NUM_FEATURES + CAT_FEATURES]
-    y_clf = df[CLASS_TARGET]
-    y_reg = df[REG_TARGET]
+    X = train_df[NUM_FEATURES + CAT_FEATURES]
+    y_clf = train_df[CLASS_TARGET]
+    y_reg = train_df[REG_TARGET]
 
     from sklearn.model_selection import train_test_split
     Xc_train, Xc_val, yc_train, yc_val = train_test_split(X, y_clf, test_size=0.2, random_state=42, stratify=y_clf)
@@ -242,8 +250,12 @@ if "clf" not in st.session_state or "reg" not in st.session_state or train_butto
     st.session_state["reg_metrics"] = reg_metrics
     st.session_state["clf_importances"] = importance_df
     st.session_state["clf_importances_error"] = importance_error
+    st.session_state["train_signature"] = train_signature
 
-    st.success("Models (re)trained.")
+    if auto_retrain and not train_button:
+        st.info("Scenario change detected; models retrained automatically.")
+    else:
+        st.success("Models (re)trained.")
 
 clf = st.session_state.get("clf", None)
 reg = st.session_state.get("reg", None)
@@ -338,12 +350,16 @@ with st.expander("Model metrics & explainability", expanded=True):
     st.caption("Runoff interval uses split-conformal (90%) and appears in the predictions table.")
 
 # Scenario inference
-scenario_df = apply_scenario_adjustments(df.copy(), wind_mph=scenario_wind, rain_in=scenario_rain)
+scenario_df = train_df.copy()
+counterfactual_applied = False
 if counterfactual_toggle == "force_fortified":
     scenario_df["fortified"] = 1
+    counterfactual_applied = True
 elif counterfactual_toggle == "force_unfortified":
     scenario_df["fortified"] = 0
-scenario_df = enrich_proprietary(scenario_df)
+    counterfactual_applied = True
+if counterfactual_applied:
+    scenario_df = enrich_proprietary(scenario_df)
 
 X_s = scenario_df[NUM_FEATURES + CAT_FEATURES]
 probs = clf.predict_proba(X_s)[:, 1]
@@ -384,7 +400,7 @@ with k2:
         ),
         use_container_width=True,
     )
-    st.caption(f"{high_risk} of {total_parcels} parcels ≥ {map_threshold}% risk.")
+    st.caption(f"{high_risk} of {total_parcels} parcels >= {map_threshold}% risk.")
 with k3:
     runoff_max = max(total_runoff_kgal * 1.2, 1.0)
     st.plotly_chart(
