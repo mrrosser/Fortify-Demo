@@ -7,6 +7,7 @@ import streamlit as st
 import pydeck as pdk
 import datetime as dt
 import altair as alt
+import plotly.graph_objects as go
 
 from fortifyy.config import DISPLAY_NAME, CLASS_TARGET, REG_TARGET, NUM_FEATURES, CAT_FEATURES, MAP_DEFAULTS
 from fortifyy.data import load_sample_data, validate_and_prepare
@@ -26,6 +27,67 @@ def render_metric_cards(metric_dict, layout):
             col.metric(label, "--")
         else:
             col.metric(label, fmt.format(metric_dict[key]))
+
+
+def make_gauge(title: str, value: float, threshold: float = None, max_value: float = 100.0, suffix: str = "", color_scale=None):
+    gauge = go.Indicator(
+        mode="gauge+number",
+        value=value,
+        number={"suffix": suffix, "font": {"size": 28}},
+        title={"text": title, "font": {"size": 16}},
+        gauge={
+            "axis": {"range": [0, max_value], "tickwidth": 1, "tickcolor": "#4a4a4a"},
+            "bar": {"color": "#ff6f61"},
+            "bgcolor": "white",
+            "borderwidth": 1,
+            "bordercolor": "#d9d9d9",
+            "steps": color_scale or [
+                {"range": [0, max_value * 0.4], "color": "#a8e6cf"},
+                {"range": [max_value * 0.4, max_value * 0.7], "color": "#ffd3b6"},
+                {"range": [max_value * 0.7, max_value], "color": "#ffaaa5"},
+            ],
+        },
+    )
+    if threshold is not None:
+        gauge.gauge["threshold"] = {"value": threshold, "line": {"color": "#d62728", "width": 4}}
+    fig = go.Figure(gauge)
+    fig.update_layout(margin=dict(l=10, r=10, t=40, b=10), height=250)
+    return fig
+
+
+def describe_enrichment_status(df: pd.DataFrame):
+    statuses = []
+    hurdat_warn_raw = df["_enrich_warn_hurdat2"].iloc[0] if "_enrich_warn_hurdat2" in df.columns else None
+    hurdat_warn = str(hurdat_warn_raw) if pd.notna(hurdat_warn_raw) else None
+    hurdat_has_data = "hurdat_max_wind_mph" in df.columns and df["hurdat_max_wind_mph"].notna().any()
+    if hurdat_has_data and (hurdat_warn and "bundled sample" in hurdat_warn.lower()):
+        statuses.append(("NOAA HURDAT2", "Using bundled sample snapshot", "warning"))
+    elif hurdat_has_data:
+        statuses.append(("NOAA HURDAT2", "Live data fetched", "success"))
+    else:
+        detail = hurdat_warn or "No hurricane wind history returned"
+        statuses.append(("NOAA HURDAT2", detail, "error"))
+
+    usgs_warn_raw = df["_enrich_warn_usgs"].iloc[0] if "_enrich_warn_usgs" in df.columns else None
+    usgs_warn = str(usgs_warn_raw) if pd.notna(usgs_warn_raw) else None
+    usgs_has_data = "usgs_rain_total_in" in df.columns and df["usgs_rain_total_in"].notna().any()
+    if usgs_has_data and usgs_warn and "bundled" in usgs_warn.lower():
+        statuses.append(("USGS precipitation", usgs_warn, "warning"))
+    elif usgs_has_data:
+        statuses.append(("USGS precipitation", "Live gauge total", "success"))
+    else:
+        detail = usgs_warn or "No active NWIS gauge within bounding box"
+        statuses.append(("USGS precipitation", detail, "warning"))
+
+    if any(c.startswith("_enrich_warn_fema") for c in df.columns):
+        warn = df.filter(regex=r"^_enrich_warn_fema").iloc[0].dropna().astype(str)
+        detail = warn.iloc[0] if not warn.empty else "Error pulling FEMA data"
+        statuses.append(("FEMA damage assessments", detail, "warning"))
+    else:
+        if "fema_da_points" in df.columns:
+            statuses.append(("FEMA damage assessments", "Live FeatureServer data merged", "success"))
+
+    return statuses
 
 
 st.set_page_config(page_title=f"{DISPLAY_NAME} - Local Demo (LIVE)", layout="wide")
@@ -92,6 +154,23 @@ if enrich_toggle:
     with st.spinner('Fetching NOAA/USGS/FEMA features...'):
         df = enrich_with_public_data(df, start_date=str(ed1), end_date=str(ed2), bbox=bbox, fema_feature_url=fema_feature_url)
     st.success('Enriched with public data.')
+    status_rows = describe_enrichment_status(df)
+    if status_rows:
+        badge_colors = {"success": "#28a745", "warning": "#ffb703", "error": "#e63946"}
+        badge_icons = {"success": "✅", "warning": "⚠️", "error": "❌"}
+        parts = []
+        for label, detail, level in status_rows:
+            color = badge_colors.get(level, "#6c757d")
+            icon = badge_icons.get(level, "ℹ️")
+            parts.append(
+                f"""
+                <div style="border-left:4px solid {color};padding:8px 12px;margin-bottom:6px;background-color:rgba(0,0,0,0.03);border-radius:4px;">
+                    <strong style="color:{color};">{icon} {label}:</strong>
+                    <span style="margin-left:6px;color:#333;">{detail}</span>
+                </div>
+                """
+            )
+        st.markdown("".join(parts), unsafe_allow_html=True)
     if any(c for c in df.columns if c.startswith("_enrich_warn_")):
         with st.expander("Enrichment warnings", expanded=False):
             warns = [f"{c}: {df[c].iloc[0]}" for c in df.columns if c.startswith("_enrich_warn_")]
@@ -234,11 +313,47 @@ scenario_df["pred_runoff_hi"] = runoff_hi
 high_risk = (scenario_df["pred_damage_prob"] >= (map_threshold/100)).sum()
 avg_prob = float(np.mean(scenario_df["pred_damage_prob"]) * 100)
 total_runoff_kgal = float(np.sum(scenario_df["pred_runoff_gal"]) / 1000.0)
+total_parcels = len(scenario_df)
+high_risk_pct = float(high_risk / total_parcels * 100) if total_parcels else 0.0
 
 k1, k2, k3 = st.columns(3)
-k1.metric("Avg damage risk", f"{avg_prob:.1f}%")
-k2.metric(f"High-risk parcels (>={map_threshold}%)", f"{high_risk}")
-k3.metric("Total runoff (kgal)", f"{total_runoff_kgal:.1f}")
+with k1:
+    st.plotly_chart(make_gauge("Avg damage risk", avg_prob, threshold=float(map_threshold), suffix="%", max_value=100.0), use_container_width=True)
+    st.caption("Mean predicted probability of roof damage.")
+with k2:
+    risk_scale = [
+        {"range": [0, map_threshold], "color": "#a8e6cf"},
+        {"range": [map_threshold, 100], "color": "#ffaaa5"},
+    ]
+    st.plotly_chart(
+        make_gauge(
+            f"High-risk share",
+            high_risk_pct,
+            threshold=float(map_threshold),
+            suffix="%",
+            max_value=100.0,
+            color_scale=risk_scale,
+        ),
+        use_container_width=True,
+    )
+    st.caption(f"{high_risk} of {total_parcels} parcels ≥ {map_threshold}% risk.")
+with k3:
+    runoff_max = max(total_runoff_kgal * 1.2, 1.0)
+    st.plotly_chart(
+        make_gauge(
+            "Total runoff",
+            total_runoff_kgal,
+            max_value=runoff_max,
+            suffix=" kgal",
+            color_scale=[
+                {"range": [0, runoff_max * 0.4], "color": "#b3cde0"},
+                {"range": [runoff_max * 0.4, runoff_max * 0.7], "color": "#fbb4ae"},
+                {"range": [runoff_max * 0.7, runoff_max], "color": "#f768a1"},
+            ],
+        ),
+        use_container_width=True,
+    )
+    st.caption("Total predicted runoff volume across all parcels.")
 
 # Map
 st.subheader("Risk Map")

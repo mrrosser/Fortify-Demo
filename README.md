@@ -6,6 +6,8 @@ This is a local, VS Code–friendly Streamlit app with:
 - Calibrated classifier for damage probability; conformal intervals for runoff
 - **Live connectors**: NOAA HURDAT2 (wind tracks), USGS NWIS (precip), optional FEMA ArcGIS (damage pts)
 
+A Streamlit *User Guide* page (available under the **☰ menu → User Guide**) summarizes the workflow for non-technical reviewers.
+
 ## Quickstart (macOS/Linux)
 ```bash
 python -m venv .venv && source .venv/bin/activate
@@ -51,5 +53,7 @@ Optional overrides:
 - `HURDAT2_URL`, `FEMA_DA_FEATURE_URL`, or a narrowed NWIS bounding box if you have curated mirrors.
 
 When the key is set, the app transparently falls back to Firecrawl if direct NOAA/USGS/FEMA requests fail, keeping the map populated for client demos.
+If both live and Firecrawl calls fail (e.g., the NOAA text file is temporarily unavailable), the app drops back to the bundled `sample_data/hurdat2_sample.txt` so the demo still renders winds without breaking.
+The USGS connector behaves the same way, inserting the cached `sample_data/usgs_precip_sample.json` total if no active gauges respond.
 
 Open http://localhost:8501 in your browser.

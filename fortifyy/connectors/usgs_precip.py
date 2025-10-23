@@ -1,6 +1,9 @@
 
+import json
+from pathlib import Path
+from typing import Optional, Tuple
+
 import pandas as pd, requests
-from typing import Tuple
 
 from fortifyy.firecrawl_client import (
     FirecrawlUnavailable,
@@ -65,11 +68,40 @@ def fetch_daily_precip(site_no: str, start_date: str, end_date: str) -> pd.DataF
         df["value_in"] = pd.to_numeric(df["value_in"], errors="coerce")
     return df
 
-def nearest_precip_total(lat: float, lon: float, start_date: str, end_date: str, bbox: Tuple[float,float,float,float]) -> float:
+
+def _load_sample_precip_total() -> Optional[float]:
+    sample_path = Path(__file__).resolve().parents[1] / "sample_data" / "usgs_precip_sample.json"
+    if not sample_path.exists():
+        return None
+    try:
+        data = json.loads(sample_path.read_text())
+        val = float(data.get("total_inches"))
+        if pd.isna(val):
+            return None
+        return val
+    except Exception:
+        return None
+
+
+def nearest_precip_total(
+    lat: float,
+    lon: float,
+    start_date: str,
+    end_date: str,
+    bbox: Tuple[float, float, float, float]
+) -> Tuple[float, Optional[str]]:
     sites = find_precip_sites_in_bbox(*bbox)
     if sites.empty:
-        return float("nan")
+        fallback = _load_sample_precip_total()
+        if fallback is not None:
+            return float(fallback), "Using bundled rainfall sample (no active gauge in box)"
+        return float("nan"), "No active NWIS gauge within bounding box"
     sites["dist"] = ((sites["dec_lat_va"] - lat)**2 + (sites["dec_long_va"] - lon)**2)**0.5
     site = sites.sort_values("dist").iloc[0]
     df = fetch_daily_precip(site["site_no"], start_date, end_date)
-    return float(df["value_in"].sum()) if not df.empty else float("nan")
+    if df.empty or df["value_in"].notna().sum() == 0:
+        fallback = _load_sample_precip_total()
+        if fallback is not None:
+            return float(fallback), f"Bundled rainfall sample used (nearest site {site['site_no']} lacked data)"
+        return float("nan"), f"No precipitation values returned for site {site['site_no']}"
+    return float(df["value_in"].sum()), None
