@@ -16,7 +16,7 @@ st.markdown(
 - **Enrichment status & warnings** - Expand the panel to see which public feeds (NOAA, USGS, FEMA) are live, cached, or unavailable.
 - **Gauge cards** - View average damage probability, the share of parcels above the high-risk threshold, and total runoff volume.
 - **Map legend** - Explains the color gradient (red = higher risk, green = lower) and respects the radius slider.
-- **Metrics & Explainability** - Inspect classifier/regression performance and filter permutation importances by feature group.
+- **Performance overview** - Simple cards summarize ROC AUC, accuracy, and runoff MAE; enable **Show advanced metrics & explainability** for feature filtering and detailed charts.
 - **Predictions table** - Sort parcels and download CSVs of the full scenario output.
 
 ## 3. Data Sources & Fallbacks

@@ -269,87 +269,105 @@ reg_metrics = st.session_state.get("reg_metrics", {})
 importance_df = st.session_state.get("clf_importances")
 importance_error = st.session_state.get("clf_importances_error")
 
-with st.expander("Model metrics & explainability", expanded=True):
-    st.subheader("Damage classifier")
-    render_metric_cards(
-        clf_metrics,
-        [
-            ("ROC AUC", "roc_auc", "{:.3f}"),
-            ("Avg precision", "avg_precision", "{:.3f}"),
-            ("Accuracy", "accuracy", "{:.3f}"),
-            ("Brier score", "brier", "{:.3f}"),
-            ("ECE (10 bins)", "ece_10", "{:.3f}"),
-        ],
-    )
-    if importance_df is not None and not importance_df.empty and importance_df["importance"].abs().sum() > 0:
-        display_df = importance_df.copy()
-        if "importance_pct" not in display_df.columns:
-            total = display_df["importance"].abs().sum()
-            display_df["importance_pct"] = (display_df["importance"].abs() / total * 100.0) if total > 0 else 0.0
-        display_df = display_df.fillna(0)
-        display_df["importance"] = display_df["importance"].round(4)
-        display_df["importance_pct"] = display_df["importance_pct"].round(1)
-        group_options = {
-            "All features": None,
-            "Structural inputs": set(BASE_NUM_FEATURES),
-            "Proprietary signals": set(PROPRIETARY_FEATURES),
-            "Public data inputs": set(PUBLIC_NUM_FEATURES),
-            "Categorical inputs": set(CAT_FEATURES),
-        }
-        selected_group = st.selectbox(
-            "Feature group",
-            list(group_options.keys()),
-            index=0,
-            key="importance_group_filter",
-        )
-        filtered_df = display_df.copy()
-        group_set = group_options[selected_group]
-        if group_set:
-            filtered_df = filtered_df[filtered_df["feature"].isin(group_set)]
-        if filtered_df.empty:
-            st.info("No features available for the selected group. Try choosing a different filter.")
-        else:
-            top_max = len(filtered_df)
-            top_default = min(8, top_max)
-            top_n = st.slider(
-                "Top features to display",
-                min_value=1,
-                max_value=top_max,
-                value=top_default,
-                key="importance_top_n",
-            )
-            top_df = filtered_df.sort_values("importance", ascending=False).head(top_n)
-            chart_data = top_df.sort_values("importance", ascending=True)
-            chart = (
-                alt.Chart(chart_data)
-                .mark_bar(color="#4e79a7")
-                .encode(
-                    x=alt.X("importance:Q", title="Permutation importance"),
-                    y=alt.Y("feature:N", sort=alt.Sort(field="importance", order="ascending")),
-                    tooltip=[
-                        alt.Tooltip("feature:N", title="Feature"),
-                        alt.Tooltip("importance:Q", title="Importance", format=".4f"),
-                        alt.Tooltip("importance_pct:Q", title="Share (%)", format=".1f"),
-                    ],
-                )
-            )
-            st.altair_chart(chart, use_container_width=True)
-            pretty_df = top_df.rename(columns={"feature": "Feature", "importance": "Importance", "importance_pct": "Share (%)"})
-            st.dataframe(pretty_df)
-    elif importance_error:
-        st.caption(f"Importance calc skipped: {importance_error}")
-    else:
-        st.caption("Feature importance was flat (all zeros). Try retraining with enrichment enabled or a larger dataset.")
+st.markdown("### Performance overview")
+summary_cols = st.columns(3)
+summary_cols[0].metric(
+    "Damage ROC AUC",
+    f"{clf_metrics.get('roc_auc', float('nan')):.3f}" if clf_metrics else "--",
+)
+summary_cols[1].metric(
+    "Damage accuracy",
+    f"{clf_metrics.get('accuracy', float('nan')):.3f}" if clf_metrics else "--",
+)
+summary_cols[2].metric(
+    "Runoff MAE (gal)",
+    f"{reg_metrics.get('mae', float('nan')):.0f}" if reg_metrics else "--",
+)
 
-    st.subheader("Runoff regressor")
-    render_metric_cards(
-        reg_metrics,
-        [
-            ("MAE (gal)", "mae", "{:.0f}"),
-            ("RMSE (gal)", "rmse", "{:.0f}"),
-        ],
-    )
-    st.caption("Runoff interval uses split-conformal (90%) and appears in the predictions table.")
+adv_toggle_key = f"advanced_metrics_{train_signature[:8]}"
+show_advanced = st.checkbox("Show advanced metrics & explainability", value=False, key=adv_toggle_key)
+
+if show_advanced:
+    with st.expander("Damage classifier diagnostics", expanded=True):
+        render_metric_cards(
+            clf_metrics,
+            [
+                ("ROC AUC", "roc_auc", "{:.3f}"),
+                ("Avg precision", "avg_precision", "{:.3f}"),
+                ("Accuracy", "accuracy", "{:.3f}"),
+                ("Brier score", "brier", "{:.3f}"),
+                ("ECE (10 bins)", "ece_10", "{:.3f}"),
+            ],
+        )
+        if importance_df is not None and not importance_df.empty and importance_df["importance"].abs().sum() > 0:
+            display_df = importance_df.copy()
+            if "importance_pct" not in display_df.columns:
+                total = display_df["importance"].abs().sum()
+                display_df["importance_pct"] = (display_df["importance"].abs() / total * 100.0) if total > 0 else 0.0
+            display_df = display_df.fillna(0)
+            display_df["importance"] = display_df["importance"].round(4)
+            display_df["importance_pct"] = display_df["importance_pct"].round(1)
+            group_options = {
+                "All features": None,
+                "Structural inputs": set(BASE_NUM_FEATURES),
+                "Proprietary signals": set(PROPRIETARY_FEATURES),
+                "Public data inputs": set(PUBLIC_NUM_FEATURES),
+                "Categorical inputs": set(CAT_FEATURES),
+            }
+            selected_group = st.selectbox(
+                "Feature group",
+                list(group_options.keys()),
+                index=0,
+                key=f"importance_group_filter_{train_signature[:6]}",
+            )
+            filtered_df = display_df.copy()
+            group_set = group_options[selected_group]
+            if group_set:
+                filtered_df = filtered_df[filtered_df["feature"].isin(group_set)]
+            if filtered_df.empty:
+                st.info("No features available for the selected group. Try choosing a different filter.")
+            else:
+                top_max = len(filtered_df)
+                top_default = min(8, top_max)
+                top_n = st.slider(
+                    "Top features to display",
+                    min_value=1,
+                    max_value=top_max,
+                    value=top_default,
+                    key=f"importance_top_n_{train_signature[:6]}",
+                )
+                top_df = filtered_df.sort_values("importance", ascending=False).head(top_n)
+                chart_data = top_df.sort_values("importance", ascending=True)
+                chart = (
+                    alt.Chart(chart_data)
+                    .mark_bar(color="#4e79a7")
+                    .encode(
+                        x=alt.X("importance:Q", title="Permutation importance"),
+                        y=alt.Y("feature:N", sort=alt.Sort(field="importance", order="ascending")),
+                        tooltip=[
+                            alt.Tooltip("feature:N", title="Feature"),
+                            alt.Tooltip("importance:Q", title="Importance", format=".4f"),
+                            alt.Tooltip("importance_pct:Q", title="Share (%)", format=".1f"),
+                        ],
+                    )
+                )
+                st.altair_chart(chart, use_container_width=True)
+                pretty_df = top_df.rename(columns={"feature": "Feature", "importance": "Importance", "importance_pct": "Share (%)"})
+                st.dataframe(pretty_df, use_container_width=True)
+        elif importance_error:
+            st.caption(f"Importance calc skipped: {importance_error}")
+        else:
+            st.caption("Feature importance was flat (all zeros). Try retraining with enrichment enabled or a larger dataset.")
+
+    with st.expander("Runoff regressor diagnostics", expanded=False):
+        render_metric_cards(
+            reg_metrics,
+            [
+                ("MAE (gal)", "mae", "{:.0f}"),
+                ("RMSE (gal)", "rmse", "{:.0f}"),
+            ],
+        )
+        st.caption("Runoff interval uses split-conformal (90%) and appears in the predictions table.")
 
 # Scenario inference
 scenario_df = train_df.copy()
